@@ -1,11 +1,13 @@
 # `insights`
 > process exported whatsapp chat and generates insights.
 
+![build badge](https://github.com/umayr/insights-rs/workflows/Build/badge.svg)
+
 # Usage
 
 You need to have rust and cargo set up on your machine as it's not published anywhere
 
-```b
+```
 λ git clone github.com/umayr/insights-rs
 λ cd insights-rs
  
@@ -38,6 +40,6 @@ Options:
                                     - yearly
 
 λ insights path/to/exported/chat/file.txt
-# [...]
+# {...}
 ```
 
