@@ -5,7 +5,7 @@ use chrono::prelude::*;
 
 use crate::emoji::EMOJI;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum MessageType {
     Image,
     Text,
@@ -15,7 +15,7 @@ pub enum MessageType {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Message {
     pub datetime: NaiveDateTime,
     pub author: String,
@@ -32,6 +32,7 @@ pub enum MessageErrorKind {
 #[derive(Debug)]
 pub struct MessageError(pub MessageErrorKind);
 
+// TODO: use `error::Error`
 impl Error for MessageError {
     fn description(&self) -> &str {
         match self.0 {
@@ -73,7 +74,7 @@ impl Message {
         };
 
         let author = String::from(author);
-        let text = String::from(text);
+        let text = String::from(text.trim());
 
         Ok(Message {
             datetime,
