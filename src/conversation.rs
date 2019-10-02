@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::string;
 
 use std::ops::Add;
 use std::ops::Sub;
@@ -10,9 +11,7 @@ use regex::Regex;
 use crate::emoji::{self, Emojis};
 use crate::message::{Message, MessageError, MessageErrorKind, Result};
 
-pub type Frequency = HashMap<String, u32>;
-pub type Timeline = HashMap<NaiveDateTime, Conversation>;
-
+#[derive(Clone, Copy, Serialize, Debug)]
 pub enum TimelineType {
     Daily,
     Weekly,
@@ -21,6 +20,15 @@ pub enum TimelineType {
 }
 
 impl TimelineType {
+    fn as_days(&self) -> u32 {
+        match self {
+            TimelineType::Daily => 1,
+            TimelineType::Weekly => 7,
+            TimelineType::Monthly => 31,
+            TimelineType::Yearly => 365,
+        }
+    }
+
     fn duration(&self) -> Duration {
         match self {
             TimelineType::Daily => Duration::days(1),
@@ -64,6 +72,121 @@ impl TimelineType {
     }
 }
 
+impl string::ToString for TimelineType {
+    fn to_string(&self) -> String {
+        match self {
+            TimelineType::Daily => String::from("daily"),
+            TimelineType::Weekly => String::from("weekly"),
+            TimelineType::Monthly => String::from("monthly"),
+            TimelineType::Yearly => String::from("yearly"),
+        }
+    }
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Stats<T> {
+    messages: T,
+    words: T,
+    letters: T,
+}
+
+impl Stats<f32> {
+    fn calc_average(cnv: &Conversation, period: TimelineType) -> Self {
+        let period = period.as_days() as f32;
+
+        let messages = cnv.count() as f32 / period;
+        let words = cnv.words() as f32 / period;
+        let letters = cnv.letters() as f32 / period;
+
+        Self {
+            messages,
+            words,
+            letters,
+        }
+    }
+}
+
+impl Stats<usize> {
+    fn calc_total(cnv: &Conversation) -> Self {
+        Self {
+            messages: cnv.count(),
+            words: cnv.words(),
+            letters: cnv.letters(),
+        }
+    }
+}
+
+pub type Frequency = HashMap<String, u32>;
+pub type DateTimeHashMap<T> = HashMap<NaiveDateTime, T>;
+
+pub type TimelineMap = DateTimeHashMap<Conversation>;
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ParticipantStats {
+    total: Stats<usize>,
+    average: Stats<f32>,
+}
+
+pub type ParticipantMap = HashMap<String, ParticipantStats>;
+
+#[derive(Serialize, Clone, Debug)]
+pub struct TimelineStats {
+    total: Stats<usize>,
+    average: Stats<f32>,
+
+    period: TimelineType,
+    participants: ParticipantMap,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Timeline(DateTimeHashMap<TimelineStats>);
+
+impl Into<DateTimeHashMap<TimelineStats>> for Timeline {
+    fn into(self) -> DateTimeHashMap<TimelineStats> {
+        self.0
+    }
+}
+
+impl Timeline {
+    fn new(src: TimelineMap, period: TimelineType) -> Self {
+        let mut map = HashMap::new();
+
+        for (dt, cnv) in src {
+            let total = Stats::<usize>::calc_total(&cnv);
+            let average = Stats::<f32>::calc_average(&cnv, period);
+
+            let mut participants: ParticipantMap = HashMap::new();
+
+            for p in cnv.participants() {
+                let p_cnv = cnv.by_author(p.to_string());
+
+                let p_total = Stats::<usize>::calc_total(&p_cnv);
+                let p_average = Stats::<f32>::calc_average(&p_cnv, period);
+
+                participants.insert(
+                    p.to_string(),
+                    ParticipantStats {
+                        total: p_total,
+                        average: p_average,
+                    },
+                );
+            }
+
+            map.insert(
+                dt,
+                TimelineStats {
+                    total,
+                    average,
+                    participants,
+                    period: period,
+                },
+            );
+        }
+
+        Timeline(map)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Conversation {
     messages: Vec<Message>,
@@ -81,8 +204,14 @@ impl Conversation {
         let mut participants: Vec<String> = Vec::new();
 
         for capture in PATTERN.captures_iter(&raw) {
+            if capture["text"]
+                .contains("Messages to this group are now secured with end-to-end encryption")
+            {
+                continue;
+            }
+
             let message =
-                match Message::from_str(&capture["datetime"], &capture["author"], &capture["text"])
+                match Message::from_str(&capture["datetime"], &capture["author"], &capture["text"].trim())
                 {
                     Ok(message) => message,
                     Err(e) => return Err(e),
@@ -128,7 +257,7 @@ impl Conversation {
         Ok(last.datetime.sub(first.datetime))
     }
 
-    fn count(&self) -> usize {
+    pub fn count(&self) -> usize {
         self.messages.len()
     }
 
@@ -229,7 +358,7 @@ impl Conversation {
         map
     }
 
-    pub fn timeline(&self, kind: TimelineType) -> Timeline {
+    fn timeline_map(&self, kind: TimelineType) -> TimelineMap {
         let first = self.first().unwrap().datetime;
         let last = self.last().unwrap().datetime;
 
@@ -250,6 +379,10 @@ impl Conversation {
         }
 
         timeline
+    }
+
+    pub fn timeline(&self, kind: TimelineType) -> Timeline {
+        Timeline::new(self.timeline_map(kind), kind)
     }
 }
 
@@ -370,7 +503,7 @@ mod tests {
         }
     }
 
-    macro_rules! assert_timeline_item {
+    macro_rules! assert_timeline_map_item {
         ($what: expr,$key: tt, $val: tt) => {
             let key = NaiveDateTime::parse_from_str($key, "%Y-%m-%dT%H:%M:%S").unwrap();
             assert!($what.contains_key(&key), "with key: {}", key);
@@ -381,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn timeline_daily_works() {
+    fn timeline_map_daily_works() {
         let mock_for_daily = r"
 [2001-01-19, 00:34:56] Kendrick: Sit down!
 [2001-01-19, 23:59:59] Kendrick: Bitch, be humble.
@@ -391,18 +524,18 @@ mod tests {
 [2001-01-23, 23:59:59] Kendrick: Bitch, be humble.
     ";
         let c = Conversation::from_str(mock_for_daily).unwrap();
-        let t = c.timeline(TimelineType::Daily);
+        let t = c.timeline_map(TimelineType::Daily);
 
         assert_eq!(t.len(), 5);
 
-        assert_timeline_item!(t, "2001-01-19T00:00:00", 2);
-        assert_timeline_item!(t, "2001-01-20T00:00:00", 1);
-        assert_timeline_item!(t, "2001-01-21T00:00:00", 1);
-        assert_timeline_item!(t, "2001-01-22T00:00:00", 1);
-        assert_timeline_item!(t, "2001-01-23T00:00:00", 1);
+        assert_timeline_map_item!(t, "2001-01-19T00:00:00", 2);
+        assert_timeline_map_item!(t, "2001-01-20T00:00:00", 1);
+        assert_timeline_map_item!(t, "2001-01-21T00:00:00", 1);
+        assert_timeline_map_item!(t, "2001-01-22T00:00:00", 1);
+        assert_timeline_map_item!(t, "2001-01-23T00:00:00", 1);
     }
     #[test]
-    fn timeline_weekly_works() {
+    fn timeline_map_weekly_works() {
         let mock_for_weekly = r"
 [2001-01-01, 00:34:56] Kendrick: Sit down!
 [2001-01-02, 23:59:59] Kendrick: Bitch, be humble.
@@ -424,17 +557,17 @@ mod tests {
 [2001-01-18, 23:59:59] Kendrick: Bitch, be humble.";
 
         let c = Conversation::from_str(mock_for_weekly).unwrap();
-        let t = c.timeline(TimelineType::Weekly);
+        let t = c.timeline_map(TimelineType::Weekly);
 
         assert_eq!(t.keys().len(), 3);
 
-        assert_timeline_item!(t, "2001-01-01T00:00:00", 7);
-        assert_timeline_item!(t, "2001-01-08T00:00:00", 7);
-        assert_timeline_item!(t, "2001-01-15T00:00:00", 4);
+        assert_timeline_map_item!(t, "2001-01-01T00:00:00", 7);
+        assert_timeline_map_item!(t, "2001-01-08T00:00:00", 7);
+        assert_timeline_map_item!(t, "2001-01-15T00:00:00", 4);
     }
 
     #[test]
-    fn timeline_monthly_works() {
+    fn timeline_map_monthly_works() {
         let mock_for_monthly = r"
 [2001-01-02, 00:34:56] Kendrick: Sit down!
 [2001-01-02, 23:59:59] Kendrick: Bitch, be humble.
@@ -457,17 +590,46 @@ mod tests {
 ";
 
         let c = Conversation::from_str(mock_for_monthly).unwrap();
-        let t = c.timeline(TimelineType::Monthly);
+        let t = c.timeline_map(TimelineType::Monthly);
 
         assert_eq!(t.keys().len(), 7);
 
-        assert_timeline_item!(t, "2001-01-01T00:00:00", 5);
-        assert_timeline_item!(t, "2001-02-01T00:00:00", 4);
-        assert_timeline_item!(t, "2001-03-01T00:00:00", 5);
-        assert_timeline_item!(t, "2001-04-01T00:00:00", 0);
-        assert_timeline_item!(t, "2001-05-01T00:00:00", 0);
-        assert_timeline_item!(t, "2001-06-01T00:00:00", 0);
-        assert_timeline_item!(t, "2001-07-01T00:00:00", 4);
+        assert_timeline_map_item!(t, "2001-01-01T00:00:00", 5);
+        assert_timeline_map_item!(t, "2001-02-01T00:00:00", 4);
+        assert_timeline_map_item!(t, "2001-03-01T00:00:00", 5);
+        assert_timeline_map_item!(t, "2001-04-01T00:00:00", 0);
+        assert_timeline_map_item!(t, "2001-05-01T00:00:00", 0);
+        assert_timeline_map_item!(t, "2001-06-01T00:00:00", 0);
+        assert_timeline_map_item!(t, "2001-07-01T00:00:00", 4);
+    }
+
+    #[test]
+    fn timeline_map_yearly_works() {
+        let mock_for_yearly = r"`
+[2001-02-13, 00:34:56] Kendrick: Sit down!
+[2001-02-14, 10:34:56] Kendrick: Aye.
+[2002-07-18, 23:59:59] Kendrick: Bitch, be humble!!
+[2002-08-01, 13:59:59] Kendrick: Aye.
+[2003-01-27, 00:34:56] Kendrick: Sit down!
+[2004-12-01, 23:59:59] Kendrick: Bitch, be humble.
+[2005-09-17, 00:34:56] Kendrick: Sit down!
+[2006-07-18, 23:59:59] Kendrick: Bitch, be humble.
+[2007-02-17, 00:34:56] Kendrick: Sit down!
+[2008-01-06, 23:59:59] Kendrick: Bitch, be humble.
+";
+        let c = Conversation::from_str(mock_for_yearly).unwrap();
+        let t = c.timeline_map(TimelineType::Yearly);
+
+        assert_eq!(t.keys().len(), 8);
+
+        assert_timeline_map_item!(t, "2001-01-01T00:00:00", 2);
+        assert_timeline_map_item!(t, "2002-01-01T00:00:00", 2);
+        assert_timeline_map_item!(t, "2003-01-01T00:00:00", 1);
+        assert_timeline_map_item!(t, "2004-01-01T00:00:00", 1);
+        assert_timeline_map_item!(t, "2005-01-01T00:00:00", 1);
+        assert_timeline_map_item!(t, "2006-01-01T00:00:00", 1);
+        assert_timeline_map_item!(t, "2007-01-01T00:00:00", 1);
+        assert_timeline_map_item!(t, "2008-01-01T00:00:00", 1);
     }
 
     #[test]
@@ -487,15 +649,9 @@ mod tests {
         let c = Conversation::from_str(mock_for_yearly).unwrap();
         let t = c.timeline(TimelineType::Yearly);
 
-        assert_eq!(t.keys().len(), 8);
+        let m: DateTimeHashMap<_> = t.clone().into();
 
-        assert_timeline_item!(t, "2001-01-01T00:00:00", 2);
-        assert_timeline_item!(t, "2002-01-01T00:00:00", 2);
-        assert_timeline_item!(t, "2003-01-01T00:00:00", 1);
-        assert_timeline_item!(t, "2004-01-01T00:00:00", 1);
-        assert_timeline_item!(t, "2005-01-01T00:00:00", 1);
-        assert_timeline_item!(t, "2006-01-01T00:00:00", 1);
-        assert_timeline_item!(t, "2007-01-01T00:00:00", 1);
-        assert_timeline_item!(t, "2008-01-01T00:00:00", 1);
+        assert_eq!(m.len(), 8);
+        // TODO: add more cases
     }
 }
