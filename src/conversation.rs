@@ -210,12 +210,14 @@ impl Conversation {
                 continue;
             }
 
-            let message =
-                match Message::from_str(&capture["datetime"], &capture["author"], &capture["text"].trim())
-                {
-                    Ok(message) => message,
-                    Err(e) => return Err(e),
-                };
+            let message = match Message::from_str(
+                &capture["datetime"],
+                &capture["author"],
+                &capture["text"].trim(),
+            ) {
+                Ok(message) => message,
+                Err(e) => return Err(e),
+            };
             if !participants.contains(&message.author) {
                 participants.push(message.author.clone());
             }
