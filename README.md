@@ -5,7 +5,10 @@
 
 # Usage
 
-You need to have rust and cargo set up on your machine as it's not published anywhere
+You can download the pre-built binaries from [here](https://github.com/umayr/insights-rs/releases/latest).
+
+
+Or you can build it yourself but you need to have rust and cargo set up on your machine.
 
 ```
 λ git clone github.com/umayr/insights-rs
