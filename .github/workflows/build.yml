@@ -1,17 +1,21 @@
 name: Build
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - /refs/head/*
+    pull_request:
+      - '*'
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v1
-    - name: Checks for formatting
-      run: cargo fmt -- --check
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v1
+      - name: Checks for formatting
+        run: cargo fmt -- --check
+      - name: Build
+        run: cargo build --verbose
+      - name: Run tests
+        run: cargo test --verbose
+
