@@ -21,7 +21,7 @@ jobs:
             asset_name: insights-windows-amd64
           - os: macos-latest
             artifact_name: insights
-            asset_name: mything-macos-amd64
+            asset_name: insights-macos-amd64
 
     steps:
     - uses: hecrj/setup-rust-action@v1
